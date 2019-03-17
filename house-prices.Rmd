@@ -1,0 +1,435 @@
+---
+title: "House prices"
+author: "Sam Elliott"
+output:
+  html_document:
+    number_sections: true
+    toc: true
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE, warning=FALSE}
+library(knitr)
+library(corrplot)
+library(ggplot2)
+library(plyr)
+library(dplyr)
+library(zoo)
+library(nlme)
+library(pls)
+library(alr3)
+library(Metrics)
+```
+
+Grabbing the data from the two csv's.
+
+```{r}
+train <- read.csv("train.csv", stringsAsFactors = F)
+test <- read.csv("test.csv", stringsAsFactors = F)
+```
+
+Adding the SalePrice to the test data set, so I can apply the predicted value after. Combining the data so the data cleanup is applied to both sets of data, after I will split the data again. Using colSums I will determine how many columns have NA.
+
+```{r}
+test$SalePrice <- NA
+all <- rbind(train, test)
+dim(all)
+colSums(is.na(all))
+```
+
+###Filling in the missing values, and setting the right data types
+
+Since the dataset has many missing values relating to features, such as pools and garages, it will largely be replacing NA's with no feature. In addition, many of the variables which are initially read as categorical/integer can be set as ordinal. An example being OverallQuality which is read as an integer or PoolQC being read as categorical. Changing this will help the regression model.
+
+**Pool Data**
+
+For the pool data, there is a large quantity of NAs. Since there is a value of "None",NAs should replace this. Once that is done, I will turn the categories into ordinal data.
+
+```{r}
+all$PoolQC[is.na(all$PoolQC)] <- 'None'
+PoolQCStrings <- c('None' = 0, 'Po' = 1, 'Fa' = 2, 'TA' = 3, 'Gd' = 4, 'Ex' = 5)
+all$PoolQC<-as.integer(revalue(all$PoolQC, PoolQCStrings))
+table(all$PoolQC)
+```
+Looking at the data, there were 3 points were a pool area was given, but no pool quality was given. As such, I will give the median value (4) to these values.
+
+```{r}
+all[all$PoolArea>0 & all$PoolQC==0, c('PoolArea', 'PoolQC', 'OverallQual')]
+all$PoolQC[2421] <- 4
+all$PoolQC[2504] <- 4
+all$PoolQC[2600] <- 4
+```
+
+
+**Miscellaneous feature**
+
+For miscellaneous feature, I will set the NAs to 'None'
+
+
+
+```{r}
+all$MiscFeature[is.na(all$MiscFeature)] <- 'None'
+all$MiscFeature <- as.factor(all$MiscFeature)
+table(all$MiscFeature)
+```
+
+After looking at the frequencies, there are 4 "Othr" factors and one Tennis Court. This would be a strong candidate for outlier removal as it may have a large impact on house prices.
+
+**Alley**
+
+Continuing with the trend, NAs will be set to None. Since neither is officially an improvement on each other, they will be set as factors. 
+
+       Grvl	Gravel
+       Pave	Paved
+       NA 	No alley access
+
+```{r}
+all$Alley[is.na(all$Alley)] <- 'None'
+all$Alley <- as.factor(all$Alley)
+table(all$Alley)
+```
+
+**Fence quality**
+
+The usual will be done with NAs. Since neither is officially an improvement on each other, they will be set as factors. 
+
+
+```{r}
+all$Fence[is.na(all$Fence)] <- 'None'
+table(all$Fence)
+all$Fence <- as.factor(all$Fence)
+```
+
+
+**Fireplace quality, and Number of fireplaces**
+
+As similar to the pool qualities, this will be turned into ordinal data.
+
+```{r}
+all$FireplaceQu[is.na(all$FireplaceQu)] <- 'None'
+FireQc <- c('None' = 0, 'Po' = 1, 'Fa' = 2, 'TA' = 3, 'Gd' = 4, 'Ex' = 5)
+all$FireplaceQu<-as.integer(revalue(all$FireplaceQu, FireQc))
+table(all$FireplaceQu)
+```
+**LotFrontage**
+
+To fix these missing NAs, I will use the zoo library and the approx function.
+
+```{r}
+
+all$LotFrontage <- na.approx(all$LotFrontage)
+```
+
+**LotShape**
+
+This variable seems to not need any cleanup, and LotShape is not inherintly ordinal so it will be set as a factor.
+
+```{r}
+all$LotShape <- as.factor(all$LotShape)
+table(all$LotShape)
+
+```
+
+**LotConfig: Lot configuration**
+
+This variable seems to not need any cleanup, and LotConfig is not inherintly ordinal so it will be set as a factor.
+  
+```{r}
+all$LotConfig <- as.factor(all$LotConfig)
+table(all$LotConfig)
+```
+
+**Garages**
+
+One of the values that has NAs not explained by the absense on a feature is the GarageYrBlt. Since most garages are built the same year as the house, I will equal those values to each other.
+
+
+
+```{r}
+all$GarageYrBlt[is.na(all$GarageYrBlt)] <- all$YearBuilt[is.na(all$GarageYrBlt)]
+```
+
+Like other features, houses with NA GarageType will be set to none. The other columns with garage NAs will have this applied.
+
+GarageFinish is ordinal as values are better than each other (Finished is better than unfinished). The same logic as applied to other quality variables in turning them into factors, can be applied here.
+
+```{r}
+all$GarageType[is.na(all$GarageType)] <- 'None'
+all$GarageType <- as.factor(all$GarageType)
+table(all$GarageType)
+
+all$GarageFinish[is.na(all$GarageFinish)] <- 'None'
+Finish <- c('None'=0, 'Unf'=1, 'RFn'=2, 'Fin'=3)
+all$GarageFinish<-as.integer(revalue(all$GarageFinish, Finish))
+all$GarageFinish <- as.factor(all$GarageFinish)
+table(all$GarageFinish)
+
+all$GarageCond[is.na(all$GarageCond)] <- 'None'
+GarageQC <- c('None' = 0, 'Po' = 1, 'Fa' = 2, 'TA' = 3, 'Gd' = 4, 'Ex' = 5)
+all$GarageQual<-as.integer(revalue(all$GarageQual, GarageQC))
+table(all$GarageCond)
+
+all$GarageQual[is.na(all$GarageQual)] <- 'None'
+all$GarageQual <- as.factor(all$GarageQual)
+
+all$GarageQual<-as.integer(revalue(all$GarageQual, GarageQC))
+table(all$GarageQual)
+
+all$GarageCars[is.na(all$GarageCars)] <- 0
+all$GarageArea[is.na(all$GarageArea)] <- 0
+
+```
+
+###Basement Variables
+
+**Basement Variables**
+
+Many of the basement variables have NAs. Ranging from 79-82 NAs, it is likely that many are tied together. To check I will see how many rows have all 5 of the common NA types
+
+```{r}
+#check if all 79 NAs are the same observations among the variables with 80+ NAs
+length(which(is.na(all$BsmtQual) & is.na(all$BsmtCond) & is.na(all$BsmtExposure) & is.na(all$BsmtFinType1) & is.na(all$BsmtFinType2)))
+```
+
+Since 79 have all 5 NAs, it is likely they don't have basements. This will be fixed. For the other NAs I will input the modes. BsmtQual, FinType's and BsmtCond can be set as Ordinal, whereas BsmtExposure will be left as a factor.
+
+```{r}
+all$BsmtQual[is.na(all$BsmtQual)] <- 'None'
+BasementQualities <- c('None' = 0, 'Po' = 1, 'Fa' = 2, 'TA' = 3, 'Gd' = 4, 'Ex' = 5)
+all$BsmtQual<-as.integer(revalue(all$BsmtQual, BasementQualities))
+table(all$BsmtQual)
+all$BsmtCond[is.na(all$BsmtCond)] <- 'None'
+all$BsmtCond<-as.integer(revalue(all$BsmtCond, BasementQualities))
+table(all$BsmtCond)
+all$BsmtFinType1[is.na(all$BsmtFinType1)] <- 'None'
+FinishType <- c('None'=0, 'Unf'=1, 'LwQ'=2, 'Rec'=3, 'BLQ'=4, 'ALQ'=5, 'GLQ'=6)
+all$BsmtFinType1<-as.integer(revalue(all$BsmtFinType1, FinishType))
+table(all$BsmtFinType1)
+all$BsmtFinType2[is.na(all$BsmtFinType2)] <- 'None'
+
+all$BsmtFinType2<-as.integer(revalue(all$BsmtFinType2, FinishType))
+table(all$BsmtFinType2)
+
+all$BsmtExposure[is.na(all$BsmtExposure)] <- 'None'
+
+all$BsmtFinType2[333] <- names(sort(-table(all$BsmtFinType2)))[1]
+all$BsmtExposure[c(949, 1488, 2349)] <- names(sort(-table(all$BsmtExposure)))[1]
+all$BsmtCond[c(2041, 2186, 2525)] <- names(sort(-table(all$BsmtCond)))[1]
+all$BsmtQual[c(2218, 2219)] <- names(sort(-table(all$BsmtQual)))[1]
+```
+
+The remaining basement variables are all integers and match with no basement in other attributes. Ass such they will be set to 0
+
+```{r}
+all$BsmtFullBath[is.na(all$BsmtFullBath)] <-0
+all$BsmtHalfBath[is.na(all$BsmtHalfBath)] <-0
+all$BsmtFinSF1[is.na(all$BsmtFinSF1)] <-0
+all$BsmtFinSF2[is.na(all$BsmtFinSF2)] <-0
+all$BsmtUnfSF[is.na(all$BsmtUnfSF)] <-0
+all$TotalBsmtSF[is.na(all$TotalBsmtSF)] <-0
+
+```
+
+**Masonry**
+For the Masonry, only one of the NA's does not match up. For that one I will put in the mode, the others will be set to none.
+
+```{r}
+
+all[is.na(all$MasVnrType) & !is.na(all$MasVnrArea), c('MasVnrType', 'MasVnrArea')]
+all$MasVnrType[2611] <- names(sort(-table(all$MasVnrType)))[2]
+```
+
+As with other variables, it will be set to None if a NA is present. Since a type is not neccesarily better than another, it will be set as a factor. Area will be set to 0
+
+```{r}
+all$MasVnrType[is.na(all$MasVnrType)] <- 'None'
+all$MasVnrType <- as.factor(all$MasVnrType)
+all$MasVnrArea[is.na(all$MasVnrArea)] <-0
+
+```
+**MSZoning**
+I will set the 4 NAs here to the mode, and set the variable to a factor. It is currently being read as an integer, when it is a classification code.
+
+```{r}
+#imputing the mode
+all$MSZoning[is.na(all$MSZoning)] <- names(sort(-table(all$MSZoning)))[1]
+all$MSZoning <- as.factor(all$MSZoning)
+table(all$MSZoning)
+sum(table(all$MSZoning))
+```
+
+**Kitchen**
+
+Kitchen quality has 1 NA, which will be set to the mode. Like other quality variables it can be set to ordinal.
+
+```{r, message=FALSE}
+all$KitchenQual[is.na(all$KitchenQual)] <- 'TA' 
+KitchQC <- c('None' = 0, 'Po' = 1, 'Fa' = 2, 'TA' = 3, 'Gd' = 4, 'Ex' = 5)
+all$KitchenQual<-as.integer(revalue(all$KitchenQual, KitchQC))
+table(all$KitchenQual)
+sum(table(all$KitchenQual))
+```
+
+
+**Utilities: Type of utilities available**
+For this variable, only 1 row does not have the same value. As such it will be removed.
+
+```{r, message=FALSE}
+table(all$Utilities)
+all$Utilities <- NULL
+```
+
+**Functional: Home functionality**
+
+Fixing the 1 NA, using the mode and will then set  the attribute to ordinal.
+
+```{r, message=FALSE}
+#impute mode for the 1 NA
+all$Functional[is.na(all$Functional)] <- names(sort(-table(all$Functional)))[1]
+homefunction <- c('Sal'=0, 'Sev'=1, 'Maj2'=2, 'Maj1'=3, 'Mod'=4, 'Min2'=5, 'Min1'=6, 'Typ'=7)
+all$Functional <- as.integer(revalue(all$Functional, homefunction))
+table(all$Functional)
+```
+
+
+**Exterior**
+
+2 attributes have NAs, they will be replaced by the mode. The 1st and 2nd attributes will be left as categorical, while the Qual & Cond will be set to ordinal.
+
+
+```{r}
+#imputing mode
+all$Exterior1st[is.na(all$Exterior1st)] <- names(sort(-table(all$Exterior1st)))[1]
+all$Exterior2nd[is.na(all$Exterior2nd)] <- names(sort(-table(all$Exterior2nd)))[1]
+
+all$Exterior1st <- as.factor(all$Exterior1st)
+table(all$Exterior1st)
+all$Exterior2nd <- as.factor(all$Exterior2nd)
+table(all$Exterior2nd)
+
+ExterQC <- c('None' = 0, 'Po' = 1, 'Fa' = 2, 'TA' = 3, 'Gd' = 4, 'Ex' = 5)
+all$ExterQual<-as.integer(revalue(all$ExterQual, ExterQC))
+table(all$ExterQual)
+
+all$ExterCond<-as.integer(revalue(all$ExterCond, ExterQC))
+table(all$ExterCond)
+```
+
+**Electrical**
+1 NA, so using the mode and the values are categorical as it is not clear what is more valuable.
+
+
+```{r}
+all$Electrical[is.na(all$Electrical)] <- names(sort(-table(all$Electrical)))[1]
+all$Electrical <- as.factor(all$Electrical)
+table(all$Electrical)
+```
+
+**SaleType**
+Use mode to fix NA and set as a factor.
+
+```{r}
+all$SaleType[is.na(all$SaleType)] <- names(sort(-table(all$SaleType)))[1]
+
+all$SaleType <- as.factor(all$SaleType)
+table(all$SaleType)
+```
+
+**SaleCondition**
+No NAs, setting as a factor
+
+```{r}
+all$SaleCondition <- as.factor(all$SaleCondition)
+table(all$SaleCondition)
+sum(table(all$SaleCondition))
+```
+
+
+**Classifying Remaining Variables**
+The remaining variables have no NAs, so setting the data type is required.
+
+```{r}
+
+all$Foundation <- as.factor(all$Foundation)
+all$Heating <- as.factor(all$Heating)
+Qualities <- c('None' = 0, 'Po' = 1, 'Fa' = 2, 'TA' = 3, 'Gd' = 4, 'Ex' = 5)
+all$HeatingQC<-as.integer(revalue(all$HeatingQC, Qualities))
+all$CentralAir<-as.integer(revalue(all$CentralAir, c('N'=0, 'Y'=1)))
+all$RoofStyle <- as.factor(all$RoofStyle)
+all$RoofMatl <- as.factor(all$RoofMatl)
+all$LandContour <- as.factor(all$LandContour)
+all$LandSlope <- as.factor(all$LandSlope)
+all$BldgType <- as.factor(all$BldgType)
+all$HouseStyle <- as.factor(all$HouseStyle)
+all$Neighborhood <- as.factor(all$Neighborhood)
+all$Condition1 <- as.factor(all$Condition1)
+all$Condition2 <- as.factor(all$Condition2)
+all$Street<-as.integer(revalue(all$Street, c('Grvl'=0, 'Pave'=1)))
+all$PavedDrive<-as.integer(revalue(all$PavedDrive, c('N'=0, 'P'=1, 'Y'=2)))
+#Year can remain the same, as an integer
+all$MoSold <- as.factor(all$MoSold)
+all$MSSubClass <- as.factor(all$MSSubClass)
+all$MSSubClass<-revalue(all$MSSubClass, c('20'='1 story 1946+', '30'='1 story 1945-', '40'='1 story unf attic', '45'='1,5 story unf', '50'='1,5 story fin', '60'='2 story 1946+', '70'='2 story 1945-', '75'='2,5 story all ages', '80'='split/multi level', '85'='split foyer', '90'='duplex all style/age', '120'='1 story PUD 1946+', '150'='1,5 story PUD all', '160'='2 story PUD 1946+', '180'='PUD multilevel', '190'='2 family conversion'))
+
+```
+
+**At this point I will do a correlation matrix between the numeric vectors to see if any can be reduced**
+
+```{r}
+numberAttributes <- unlist(lapply(all, is.numeric))
+numberAll <- as.matrix(all[,numberAttributes])
+corrplot(cor(numberAll), type = "upper")
+```
+
+Looking at the correlation matrix, I see three opportunities for feature reduction: 1st Floor Sq Ft & Bsmt Sq FT are highly correlated. Since basement attributes are captured in other fields it can be removed. GarageYrBuilt and HouseYrBuilt, I will remove GarageYrBuilt. The last is GarageArea & GarageCars, since it is easier to acquire data on the amount of cars, Area will be removed
+```{r}
+all$GarageYrBlt <- NULL
+all$BsmtFinSF1 <- NULL
+all$BsmtFinSF2 <- NULL
+all$TotalBsmtSF <- NULL
+all$GarageArea <- NULL
+all$Id <- NULL
+```
+
+Now that the data has been cleaned up, I will split it back into the provided test and train sets.
+```{r}
+train <- all[!is.na(all$SalePrice),]
+test <- all[is.na(all$SalePrice),]
+```
+
+
+From here I will divide the given training set into 70%-30% so I can test my model.
+```{r}
+split = sample(c(TRUE, FALSE), nrow(train), replace=TRUE, prob=c(0.75, 0.25))
+trainingHouse = train[split, ]
+testingHouse = train[!split, ]
+```
+
+Now I will build my linear regression models
+```{r}
+basicLinearModel <- lm(SalePrice ~ ., data=testingHouse)
+mixedLinearModel <- lme(SalePrice ~ . - MSSubClass, random = ~ 1|MSSubClass, data = testingHouse)
+principalRegressionModel <- pcr(SalePrice ~., data=testingHouse)
+```
+
+Now using the models built I will fill out the test set
+```{r}
+LinearPredict <- predict(basicLinearModel, data=testingHouse)
+MixedPredict <- predict(mixedLinearModel, data = testingHouse)
+RegressionPredict <- predict(principalRegressionModel, data=testingHouse)
+```
+
+From Here I Will Calculate the RMSE of the Models
+
+```{r}
+LinearRMSE <- rmse(testingHouse$SalePrice, LinearPredict)
+LinearRMSE
+MixedRMSE <- rmse(testingHouse$SalePrice, MixedPredict)
+MixedRMSE
+RegressionRMSE <- rmse(testingHouse$SalePrice, RegressionPredict)
+RegressionRMSE
+```
