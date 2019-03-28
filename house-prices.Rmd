@@ -20,7 +20,6 @@ library(plyr)
 library(dplyr)
 library(zoo)
 library(nlme)
-library(pls)
 library(alr3)
 library(Metrics)
 ```
@@ -382,7 +381,7 @@ all$MSSubClass<-revalue(all$MSSubClass, c('20'='1 story 1946+', '30'='1 story 19
 ```{r}
 numberAttributes <- unlist(lapply(all, is.numeric))
 numberAll <- as.matrix(all[,numberAttributes])
-corrplot(cor(numberAll), type = "upper")
+corrplot(cor(numberAll), type = 'upper')
 ```
 
 Looking at the correlation matrix, I see three opportunities for feature reduction: 1st Floor Sq Ft & Bsmt Sq FT are highly correlated. Since basement attributes are captured in other fields it can be removed. GarageYrBuilt and HouseYrBuilt, I will remove GarageYrBuilt. The last is GarageArea & GarageCars, since it is easier to acquire data on the amount of cars, Area will be removed
@@ -395,6 +394,14 @@ all$GarageArea <- NULL
 all$Id <- NULL
 ```
 
+
+Through examining the data, I know that there are a few outliers when it comes to sales price and one definitive outlier with a tennis court. To stop them from impacting the model, I will remove them from the dataset.
+```{r}
+all <- all[!(all$SalePrice > 600000 | all$MiscFeature == 'TenC'),]
+```
+
+
+
 Now that the data has been cleaned up, I will split it back into the provided test and train sets.
 ```{r}
 train <- all[!is.na(all$SalePrice),]
@@ -404,32 +411,74 @@ test <- all[is.na(all$SalePrice),]
 
 From here I will divide the given training set into 70%-30% so I can test my model.
 ```{r}
-split = sample(c(TRUE, FALSE), nrow(train), replace=TRUE, prob=c(0.75, 0.25))
-trainingHouse = train[split, ]
-testingHouse = train[!split, ]
+set.seed(100)
+split <- sample(c(TRUE, FALSE), nrow(train), replace=TRUE, prob=c(0.75, 0.25))
+trainingHouse <- train[split, ]
+testingHouse <- train[!split, ]
 ```
+
+Since I know that the SalePrice is skewed, I will build a separate model using the logarithmic values
+```{r}
+logTrainingHouse <- trainingHouse
+logTrainingHouse$SalePrice <- log(logTrainingHouse$SalePrice)
+```
+
 
 Now I will build my linear regression models
 ```{r}
-basicLinearModel <- lm(SalePrice ~ ., data=testingHouse)
-mixedLinearModel <- lme(SalePrice ~ . - MSSubClass, random = ~ 1|MSSubClass, data = testingHouse)
-principalRegressionModel <- pcr(SalePrice ~., data=testingHouse)
+basicLinearModel <- lm(SalePrice ~ ., data=trainingHouse)
+mixedLinearModel <- lme(SalePrice ~ . - MSSubClass, random = ~ 1|MSSubClass, data = trainingHouse)
+logarithmicLinearModel <- lm(SalePrice ~ ., data=logTrainingHouse)
 ```
+
+I must exclude those that have a factor which isn't in the trainingSet
+
+```{r}
+testingHouse <- testingHouse[!(testingHouse$RoofMatl == 'Roll' | testingHouse$Exterior1st == 'AsphShn' | testingHouse$Exterior2nd == 'Other' | testingHouse$GarageCond == 'Ex' | testingHouse$SaleType == 'Con'),]
+
+```
+
 
 Now using the models built I will fill out the test set
 ```{r}
-LinearPredict <- predict(basicLinearModel, data=testingHouse)
-MixedPredict <- predict(mixedLinearModel, data = testingHouse)
-RegressionPredict <- predict(principalRegressionModel, data=testingHouse)
+LinearPredict <- predict(basicLinearModel, newdata=testingHouse)
+MixedPredict <- predict(mixedLinearModel, newdata=testingHouse)
+logarithmicPredict <- predict(logarithmicLinearModel, newdata=testingHouse)
 ```
 
-From Here I Will Calculate the RMSE of the Models
+For the logarithmic model I need to retransform the predicted values
+```{r}
+logarithmicPredict <- exp(logarithmicPredict)
+```
+
+From Here I Will Calculate the RMSE and R2 of the Models
 
 ```{r}
 LinearRMSE <- rmse(testingHouse$SalePrice, LinearPredict)
 LinearRMSE
 MixedRMSE <- rmse(testingHouse$SalePrice, MixedPredict)
 MixedRMSE
-RegressionRMSE <- rmse(testingHouse$SalePrice, RegressionPredict)
-RegressionRMSE
+LogarithmicRMSE <- rmse(testingHouse$SalePrice, logarithmicPredict)
+LogarithmicRMSE
+rsq <- function(x, y) summary(lm(y~x))$r.squared
+LinearR2 <- rsq(testingHouse$SalePrice, LinearPredict)
+LinearR2
+MixedR2 <- rsq(testingHouse$SalePrice, MixedPredict)
+MixedR2
+LogarithmicR2 <- rsq(testingHouse$SalePrice, LinearPredict)
+LogarithmicR2
+```
+Looking at the above performance, it seems like the Linear model is outperforming the logarithmic when it comes to RMSE, but their R2 is near identical.
+
+I will run a t-test on the two to compare if there is a statistical difference
+
+
+```{r}
+linearDifferences <- abs(testingHouse$SalePrice - LinearPredict)
+mean(linearDifferences)
+median(linearDifferences)
+logarthimicDifferences <- abs(testingHouse$SalePrice - logarithmicPredict)
+mean(logarthimicDifferences)
+median(logarthimicDifferences)
+t.test(linearDifferences,logarthimicDifferences, paired=TRUE, alternative="two.sided")
 ```
