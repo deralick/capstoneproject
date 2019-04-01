@@ -421,6 +421,7 @@ Since I know that the SalePrice is skewed, I will build a separate model using t
 ```{r}
 logTrainingHouse <- trainingHouse
 logTrainingHouse$SalePrice <- log(logTrainingHouse$SalePrice)
+
 ```
 
 
