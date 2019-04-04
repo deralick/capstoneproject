@@ -405,7 +405,8 @@ all <- all[!(all$SalePrice > 600000 | all$MiscFeature == 'TenC'),]
 Now that the data has been cleaned up, I will split it back into the provided test and train sets.
 ```{r}
 train <- all[!is.na(all$SalePrice),]
-test <- all[is.na(all$SalePrice),]
+test <- all
+library(pls)
 ```
 
 
@@ -428,8 +429,11 @@ logTrainingHouse$SalePrice <- log(logTrainingHouse$SalePrice)
 Now I will build my linear regression models
 ```{r}
 basicLinearModel <- lm(SalePrice ~ ., data=trainingHouse)
-mixedLinearModel <- lme(SalePrice ~ . - MSSubClass, random = ~ 1|MSSubClass, data = trainingHouse)
 logarithmicLinearModel <- lm(SalePrice ~ ., data=logTrainingHouse)
+mixedLinearModel <- lme(SalePrice ~ . - MSSubClass, random = ~ 1|MSSubClass, data = trainingHouse)
+logarithmicMixedrModel <- lme(SalePrice ~ . - MSSubClass, random = ~ 1|MSSubClass, data = logTrainingHouse)
+principalRegressionModel <- pcr(SalePrice ~., data=trainingHouse)
+logarithmicPCRnModel <- pcr(SalePrice ~., data=logTrainingHouse)
 ```
 
 I must exclude those that have a factor which isn't in the trainingSet
@@ -443,13 +447,18 @@ testingHouse <- testingHouse[!(testingHouse$RoofMatl == 'Roll' | testingHouse$Ex
 Now using the models built I will fill out the test set
 ```{r}
 LinearPredict <- predict(basicLinearModel, newdata=testingHouse)
-MixedPredict <- predict(mixedLinearModel, newdata=testingHouse)
 logarithmicPredict <- predict(logarithmicLinearModel, newdata=testingHouse)
+MixedPredict <- predict(mixedLinearModel, newdata=testingHouse)
+logarithmicMixedPredict <- predict(logarithmicMixedrModel, newdata=testingHouse)
+
 ```
+With the limitations of the PCR Predict packages, I am unable to predict for a dataset which does not have the same factor level. As such, I will not include it in my test results.
 
 For the logarithmic model I need to retransform the predicted values
 ```{r}
 logarithmicPredict <- exp(logarithmicPredict)
+logarithmicMixedPredict <- exp(logarithmicMixedPredict)
+logarithmicPCRPredict <- exp(logarithmicPCRPredict)
 ```
 
 From Here I Will Calculate the RMSE and R2 of the Models
@@ -457,17 +466,23 @@ From Here I Will Calculate the RMSE and R2 of the Models
 ```{r}
 LinearRMSE <- rmse(testingHouse$SalePrice, LinearPredict)
 LinearRMSE
-MixedRMSE <- rmse(testingHouse$SalePrice, MixedPredict)
-MixedRMSE
 LogarithmicRMSE <- rmse(testingHouse$SalePrice, logarithmicPredict)
 LogarithmicRMSE
+MixedRMSE <- rmse(testingHouse$SalePrice, MixedPredict)
+MixedRMSE
+LogMixedRMSE <- rmse(testingHouse$SalePrice, logarithmicMixedPredict)
+LogMixedRMSE
+
+
 rsq <- function(x, y) summary(lm(y~x))$r.squared
 LinearR2 <- rsq(testingHouse$SalePrice, LinearPredict)
 LinearR2
-MixedR2 <- rsq(testingHouse$SalePrice, MixedPredict)
-MixedR2
 LogarithmicR2 <- rsq(testingHouse$SalePrice, LinearPredict)
 LogarithmicR2
+MixedR2 <- rsq(testingHouse$SalePrice, MixedPredict)
+MixedR2
+
+
 ```
 Looking at the above performance, it seems like the Linear model is outperforming the logarithmic when it comes to RMSE, but their R2 is near identical.
 
