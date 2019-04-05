@@ -22,6 +22,7 @@ library(zoo)
 library(nlme)
 library(alr3)
 library(Metrics)
+library(glmnet)
 ```
 
 Grabbing the data from the two csv's.
@@ -436,10 +437,28 @@ principalRegressionModel <- pcr(SalePrice ~., data=trainingHouse)
 logarithmicPCRnModel <- pcr(SalePrice ~., data=logTrainingHouse)
 ```
 
+Here I will build my lasso regression model
+```{r}
+X <- model.matrix(SalePrice~., data=trainingHouse)
+
+CVlasso <- cv.glmnet(X, trainingHouse$SalePrice)
+logCVlasso <- cv.glmnet(X, trainingHouse$SalePrice)
+lassoModel <- glmnet(X, trainingHouse$SalePrice, alpha=1, lambda=CVlasso$lambda.min)
+logLassoModel <- glmnet(X, trainingHouse$SalePrice, alpha=1,lambda=logCVlasso$lambda.min)
+```
+
 I must exclude those that have a factor which isn't in the trainingSet
 
 ```{r}
 testingHouse <- testingHouse[!(testingHouse$RoofMatl == 'Roll' | testingHouse$Exterior1st == 'AsphShn' | testingHouse$Exterior2nd == 'Other' | testingHouse$GarageCond == 'Ex' | testingHouse$SaleType == 'Con'),]
+
+BsmtCond1 <- rep(c(0), times=376)
+
+trainColNames <- colnames(X)
+
+TestX <- model.matrix(SalePrice~., data=testingHouse)
+TestX<- cbind(TestX, BsmtCond1)
+TestX <- subset(TestX, select=trainColNames)
 
 ```
 
@@ -450,6 +469,8 @@ LinearPredict <- predict(basicLinearModel, newdata=testingHouse)
 logarithmicPredict <- predict(logarithmicLinearModel, newdata=testingHouse)
 MixedPredict <- predict(mixedLinearModel, newdata=testingHouse)
 logarithmicMixedPredict <- predict(logarithmicMixedrModel, newdata=testingHouse)
+lassoPredict <- predict(lassoModel, newx=TestX, s=CVlasso$lambda.min, type='response')
+logLassoPredict <- predict(logLassoModel, newx=TestX, s=CVlasso$lambda.min, type='response')
 
 ```
 With the limitations of the PCR Predict packages, I am unable to predict for a dataset which does not have the same factor level. As such, I will not include it in my test results.
@@ -458,7 +479,7 @@ For the logarithmic model I need to retransform the predicted values
 ```{r}
 logarithmicPredict <- exp(logarithmicPredict)
 logarithmicMixedPredict <- exp(logarithmicMixedPredict)
-logarithmicPCRPredict <- exp(logarithmicPCRPredict)
+
 ```
 
 From Here I Will Calculate the RMSE and R2 of the Models
@@ -472,6 +493,10 @@ MixedRMSE <- rmse(testingHouse$SalePrice, MixedPredict)
 MixedRMSE
 LogMixedRMSE <- rmse(testingHouse$SalePrice, logarithmicMixedPredict)
 LogMixedRMSE
+LassoRMSE <- rmse(testingHouse$SalePrice, lassoPredict)
+LassoRMSE
+LogLassoRMSE <- rmse(testingHouse$SalePrice, logLassoPredict)
+LogLassoRMSE
 
 
 rsq <- function(x, y) summary(lm(y~x))$r.squared
@@ -481,12 +506,16 @@ LogarithmicR2 <- rsq(testingHouse$SalePrice, LinearPredict)
 LogarithmicR2
 MixedR2 <- rsq(testingHouse$SalePrice, MixedPredict)
 MixedR2
+LassoR2 <- rsq(testingHouse$SalePrice, lassoPredict)
+LassoR2
+LogLassoR2 <- rsq(testingHouse$SalePrice, logLassoPredict)
+LogLassoR2
 
 
 ```
-Looking at the above performance, it seems like the Linear model is outperforming the logarithmic when it comes to RMSE, but their R2 is near identical.
+Looking at the above test, it appears my lasso model is the best at predicting the likely value as well as the logarithmic linear.
 
-I will run a t-test on the two to compare if there is a statistical difference
+I will run a t-test comparing the various models to their logarithmic to show if there is a statistical difference.
 
 
 ```{r}
@@ -497,4 +526,30 @@ logarthimicDifferences <- abs(testingHouse$SalePrice - logarithmicPredict)
 mean(logarthimicDifferences)
 median(logarthimicDifferences)
 t.test(linearDifferences,logarthimicDifferences, paired=TRUE, alternative="two.sided")
+
+MixedDifferences <- abs(testingHouse$SalePrice - MixedPredict)
+mean(MixedDifferences)
+median(MixedDifferences)
+logarithmicMixedPredict <- abs(testingHouse$SalePrice - logarithmicMixedPredict)
+mean(logarithmicMixedPredict)
+median(logarithmicMixedPredict)
+t.test(MixedDifferences,logarithmicMixedPredict, paired=TRUE, alternative="two.sided")
+
+lassoDifferences <- abs(testingHouse$SalePrice - lassoPredict)
+mean(lassoDifferences)
+median(lassoDifferences)
+logLassoDifferences <- abs(testingHouse$SalePrice - logLassoPredict)
+mean(logLassoDifferences)
+median(logLassoDifferences)
+t.test(lassoDifferences,logLassoDifferences, paired=TRUE, alternative="two.sided")
+
+t.test(logarthimicDifferences,logLassoDifferences, paired=TRUE, alternative="two.sided")
+
+```
+
+Plots to visualize Difference
+```{r}
+boxplot(logLassoDifferences, main="Boxplot Logarithmic Lasso Differences", ylab="Difference from Sales Price")
+quantile(logLassoDifferences)
+sd(logLassoDifferences)
 ```
